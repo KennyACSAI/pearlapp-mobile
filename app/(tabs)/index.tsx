@@ -1,98 +1,264 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+import { useState, useCallback } from 'react';
+import { View, Text, ScrollView, StyleSheet, Pressable } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Bell, Plus } from 'lucide-react-native';
+import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { Link } from 'expo-router';
+import { Colors, Typography, Spacing } from '@/constants';
+import { reminders as initialReminders, people, Reminder } from '@/data/sampleData';
+import { ReminderRow } from '@/components/lists/ReminderRow';
+import { TagPill } from '@/components/inputs/TagPill';
+import { EmptyState } from '@/components/surfaces/EmptyState';
+import { Sheet } from '@/components/surfaces/Sheet';
+import { TextField } from '@/components/inputs/TextField';
+import { PrimaryButton } from '@/components/inputs/PrimaryButton';
+import { SecondaryButton } from '@/components/inputs/SecondaryButton';
 
-export default function HomeScreen() {
+type FilterType = 'all' | 'open' | 'done';
+
+export default function RemindersScreen() {
+  const insets = useSafeAreaInsets();
+  const [filter, setFilter] = useState<FilterType>('all');
+  const [reminders, setReminders] = useState(initialReminders);
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [selectedReminder, setSelectedReminder] = useState<string | null>(null);
+
+  const filteredReminders = filter === 'all'
+    ? reminders
+    : reminders.filter(r => r.status.toLowerCase() === filter);
+
+  const toggleReminder = useCallback((id: string) => {
+    setReminders(prev => prev.map(r =>
+      r.id === id ? { ...r, status: r.status === 'Open' ? 'Done' : 'Open' } : r
+    ));
+  }, []);
+
+  const handleReminderPress = useCallback((id: string) => {
+    setSelectedReminder(id);
+  }, []);
+
   return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+    <View style={[styles.container, { paddingTop: insets.top }]}>
+      {/* Header */}
+      <Animated.View 
+        entering={FadeInDown.duration(300).springify()}
+        style={styles.header}
+      >
+        <View style={styles.headerTop}>
+          <Text style={styles.title}>Reminders</Text>
+          <Pressable 
+            style={styles.addButton}
+            onPress={() => setIsCreateOpen(true)}
+          >
+            <Plus size={24} strokeWidth={2} color={Colors.text.primary} />
+          </Pressable>
+        </View>
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+        {/* Filter tabs */}
+        <View style={styles.filters}>
+          <Pressable onPress={() => setFilter('all')}>
+            <TagPill variant={filter === 'all' ? 'filled' : 'outlined'}>
+              All
+            </TagPill>
+          </Pressable>
+          <Pressable onPress={() => setFilter('open')}>
+            <TagPill variant={filter === 'open' ? 'filled' : 'outlined'}>
+              Open
+            </TagPill>
+          </Pressable>
+          <Pressable onPress={() => setFilter('done')}>
+            <TagPill variant={filter === 'done' ? 'filled' : 'outlined'}>
+              Done
+            </TagPill>
+          </Pressable>
+        </View>
+      </Animated.View>
+
+      {/* Reminders list */}
+      <ScrollView 
+        style={styles.list}
+        contentContainerStyle={styles.listContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {filteredReminders.length === 0 ? (
+          <EmptyState
+            icon={<Bell size={48} strokeWidth={1} color={Colors.text.primary} />}
+            title="No reminders yet"
+            description="Turn 'we should catch up' into 'done.'"
+            actionLabel="Add Reminder"
+            onAction={() => setIsCreateOpen(true)}
+          />
+        ) : (
+          filteredReminders.map((reminder, index) => (
+            <Animated.View 
+              key={reminder.id}
+              entering={FadeIn.delay(index * Spacing.animation.staggerDelay).duration(300)}
+            >
+              <ReminderRow
+                reminder={reminder}
+                onToggle={() => toggleReminder(reminder.id)}
+                onPress={() => handleReminderPress(reminder.id)}
+              />
+            </Animated.View>
+          ))
+        )}
+      </ScrollView>
+
+      {/* Create Reminder Sheet */}
+      <CreateReminderSheet
+        isOpen={isCreateOpen}
+        onClose={() => setIsCreateOpen(false)}
+      />
+    </View>
+  );
+}
+
+interface CreateReminderSheetProps {
+  isOpen: boolean;
+  onClose: () => void;
+}
+
+function CreateReminderSheet({ isOpen, onClose }: CreateReminderSheetProps) {
+  const [title, setTitle] = useState('');
+  const [selectedPerson, setSelectedPerson] = useState('');
+  const [dueDate, setDueDate] = useState('');
+  const [notes, setNotes] = useState('');
+
+  const handleSave = () => {
+    // TODO: Actually save the reminder
+    onClose();
+    // Reset form
+    setTitle('');
+    setSelectedPerson('');
+    setDueDate('');
+    setNotes('');
+  };
+
+  return (
+    <Sheet isOpen={isOpen} onClose={onClose} title="New Reminder">
+      <View style={sheetStyles.content}>
+        <TextField
+          label="Title"
+          value={title}
+          onChangeText={setTitle}
+          placeholder="Follow up with..."
+        />
+
+        <View style={sheetStyles.field}>
+          <Text style={sheetStyles.label}>Person</Text>
+          <ScrollView 
+            horizontal 
+            showsHorizontalScrollIndicator={false}
+            style={sheetStyles.personScroll}
+            contentContainerStyle={sheetStyles.personScrollContent}
+          >
+            {people.map(person => (
+              <Pressable
+                key={person.id}
+                onPress={() => setSelectedPerson(person.id)}
+              >
+                <TagPill 
+                  variant={selectedPerson === person.id ? 'filled' : 'outlined'}
+                >
+                  {person.name}
+                </TagPill>
+              </Pressable>
+            ))}
+          </ScrollView>
+        </View>
+
+        <TextField
+          label="Due Date"
+          value={dueDate}
+          onChangeText={setDueDate}
+          placeholder="YYYY-MM-DD"
+        />
+
+        <TextField
+          label="Notes"
+          value={notes}
+          onChangeText={setNotes}
+          placeholder="Add context..."
+          multiline
+          numberOfLines={4}
+        />
+
+        <View style={sheetStyles.actions}>
+          <SecondaryButton onPress={onClose} fullWidth>
+            Cancel
+          </SecondaryButton>
+          <PrimaryButton onPress={handleSave} fullWidth>
+            Save
+          </PrimaryButton>
+        </View>
+      </View>
+    </Sheet>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
+  container: {
+    flex: 1,
+    backgroundColor: Colors.background,
+  },
+  header: {
+    backgroundColor: Colors.surface[100],
+    borderBottomWidth: 2,
+    borderBottomColor: Colors.border[15],
+    paddingHorizontal: Spacing.md,
+    paddingTop: Spacing.lg,
+    paddingBottom: Spacing.md,
+    ...Spacing.shadow.sm,
+  },
+  headerTop: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    justifyContent: 'space-between',
+    marginBottom: Spacing.md,
   },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
+  title: {
+    ...Typography.largeTitle,
+    fontWeight: '600',
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
+  addButton: {
+    padding: Spacing.xs,
+    borderRadius: 10,
+  },
+  filters: {
+    flexDirection: 'row',
+    gap: Spacing.xs,
+  },
+  list: {
+    flex: 1,
+  },
+  listContent: {
+    paddingBottom: 100,
+  },
+});
+
+const sheetStyles = StyleSheet.create({
+  content: {
+    padding: Spacing.md,
+    gap: Spacing.md,
+  },
+  field: {
+    gap: 6,
+  },
+  label: {
+    ...Typography.subheadline,
+    fontWeight: '500',
+  },
+  personScroll: {
+    marginHorizontal: -Spacing.md,
+  },
+  personScrollContent: {
+    paddingHorizontal: Spacing.md,
+    gap: Spacing.xs,
+    flexDirection: 'row',
+  },
+  actions: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    marginTop: Spacing.md,
   },
 });
