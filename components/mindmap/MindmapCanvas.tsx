@@ -1,17 +1,34 @@
 // components/mindmap/MindmapCanvas.tsx
-import React, { useMemo, useCallback } from "react";
+// Animated mindmap with floating nodes, draggable with momentum, animated lines
+import React, { useMemo, useCallback, useEffect } from "react";
 import { View, StyleSheet, Dimensions, Pressable, Text } from "react-native";
-import Svg, { Circle, Line, G, Text as SvgText, Defs, LinearGradient, Stop } from "react-native-svg";
-import { GestureDetector, Gesture, GestureHandlerRootView } from "react-native-gesture-handler";
+import Svg, { Circle, Line, G, Text as SvgText } from "react-native-svg";
+import {
+  GestureDetector,
+  Gesture,
+  GestureHandlerRootView,
+} from "react-native-gesture-handler";
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
+  useAnimatedProps,
   withSpring,
+  withRepeat,
+  withSequence,
+  withTiming,
+  withDecay,
+  Easing,
+  cancelAnimation,
+  runOnJS,
+  SharedValue,
 } from "react-native-reanimated";
-import { Plus, Minus } from "lucide-react-native";
+import { Plus, Minus, RotateCcw } from "lucide-react-native";
 
 import { Person, getInitials } from "@/data/sampleData";
-import { colors, SvgColors, BorderRadius, Spacing, Shadows, Typography } from "@/constants";
+import { colors } from "@/constants";
+
+// Create animated SVG Line
+const AnimatedLine = Animated.createAnimatedComponent(Line);
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -20,66 +37,80 @@ interface MindmapCanvasProps {
   onPersonPress: (person: Person) => void;
 }
 
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+
 const NODE_RADIUS = 36;
 const ME_NODE_RADIUS = 50;
 const INITIAL_SCALE = 1;
-const MIN_SCALE = 0.4;
-const MAX_SCALE = 2.5;
-const CANVAS_PADDING = 100;
+const MIN_SCALE = 0.3;
+const MAX_SCALE = 3;
 
-// SVG-safe colors
-const SVG_COLORS = {
-  meNodeBackground: "rgb(0, 0, 0)",
-  meNodeText: "rgb(255, 255, 255)",
-  nodeBackground: "rgb(255, 255, 255)",
-  nodeStroke: "rgba(0, 0, 0, 0.12)",
-  lineStroke: "rgba(0, 0, 0, 0.08)",
-  textPrimary: "rgb(0, 0, 0)",
-  textSecondary: "rgba(0, 0, 0, 0.5)",
-};
+const FLOAT_DURATION = 6000;
+const FLOAT_DISTANCE = 8;
+
+// ============================================================================
+// UTILITY
+// ============================================================================
 
 function clamp(v: number, min: number, max: number): number {
   "worklet";
   return Math.max(min, Math.min(max, v));
 }
 
-// Calculate tree layout positions
-function calculateTreeLayout(people: Person[], canvasWidth: number, canvasHeight: number) {
-  const centerX = canvasWidth / 2;
-  const centerY = canvasHeight / 2;
-  
-  // "Me" node at center
+// ============================================================================
+// TYPES
+// ============================================================================
+
+interface NodeLayoutData extends Person {
+  x: number;
+  y: number;
+}
+
+// ============================================================================
+// LAYOUT CALCULATION
+// ============================================================================
+
+function calculateTreeLayout(
+  people: Person[],
+  centerX: number,
+  centerY: number
+) {
   const meNode = {
-    id: 'me',
-    name: 'Me',
+    id: "me",
+    name: "Me",
     x: centerX,
     y: centerY,
     isMe: true,
   };
 
-  // Calculate positions for each person in a radial tree layout
-  const nodePositions: Map<string, { x: number; y: number }> = new Map();
-  
-  // Group people by their connection depth (simplified - just one level for now)
-  // In a real app, you'd do BFS from "Me" to determine levels
   const totalPeople = people.length;
-  
   if (totalPeople === 0) {
     return { meNode, peopleNodes: [] };
   }
 
-  // First ring - direct connections (all people for now)
-  const firstRingRadius = 160;
-  const secondRingRadius = 280;
-  
-  // Sort people by number of connections (more connected = closer to center)
-  const sortedPeople = [...people].sort((a, b) => b.connections.length - a.connections.length);
-  
-  // Split into two rings if more than 6 people
-  const firstRingPeople = sortedPeople.slice(0, Math.min(6, totalPeople));
-  const secondRingPeople = sortedPeople.slice(6);
+  const nodePositions: Map<string, { x: number; y: number }> = new Map();
 
-  // Position first ring
+  // Concentric rings
+  const firstRingRadius = 140;
+  const secondRingRadius = 250;
+  const thirdRingRadius = 360;
+
+  const sortedPeople = [...people].sort(
+    (a, b) => b.connections.length - a.connections.length
+  );
+
+  const firstRingCount = Math.min(6, totalPeople);
+  const secondRingCount = Math.min(10, Math.max(0, totalPeople - 6));
+
+  const firstRingPeople = sortedPeople.slice(0, firstRingCount);
+  const secondRingPeople = sortedPeople.slice(
+    firstRingCount,
+    firstRingCount + secondRingCount
+  );
+  const thirdRingPeople = sortedPeople.slice(firstRingCount + secondRingCount);
+
   firstRingPeople.forEach((person, index) => {
     const angle = (index / firstRingPeople.length) * 2 * Math.PI - Math.PI / 2;
     nodePositions.set(person.id, {
@@ -88,16 +119,25 @@ function calculateTreeLayout(people: Person[], canvasWidth: number, canvasHeight
     });
   });
 
-  // Position second ring
   secondRingPeople.forEach((person, index) => {
-    const angle = (index / secondRingPeople.length) * 2 * Math.PI - Math.PI / 2 + Math.PI / secondRingPeople.length;
+    const angleOffset = Math.PI / Math.max(1, secondRingPeople.length);
+    const angle =
+      (index / Math.max(1, secondRingPeople.length)) * 2 * Math.PI - Math.PI / 2 + angleOffset;
     nodePositions.set(person.id, {
       x: centerX + Math.cos(angle) * secondRingRadius,
       y: centerY + Math.sin(angle) * secondRingRadius,
     });
   });
 
-  const peopleNodes = people.map(person => ({
+  thirdRingPeople.forEach((person, index) => {
+    const angle = (index / Math.max(1, thirdRingPeople.length)) * 2 * Math.PI - Math.PI / 2;
+    nodePositions.set(person.id, {
+      x: centerX + Math.cos(angle) * thirdRingRadius,
+      y: centerY + Math.sin(angle) * thirdRingRadius,
+    });
+  });
+
+  const peopleNodes: NodeLayoutData[] = people.map((person) => ({
     ...person,
     x: nodePositions.get(person.id)?.x || centerX,
     y: nodePositions.get(person.id)?.y || centerY,
@@ -106,30 +146,351 @@ function calculateTreeLayout(people: Person[], canvasWidth: number, canvasHeight
   return { meNode, peopleNodes };
 }
 
+// ============================================================================
+// ANIMATED LINE COMPONENT
+// ============================================================================
+
+interface AnimatedConnectionLineProps {
+  fromX: SharedValue<number>;
+  fromY: SharedValue<number>;
+  toX: SharedValue<number>;
+  toY: SharedValue<number>;
+  dashed?: boolean;
+}
+
+function AnimatedConnectionLine({
+  fromX,
+  fromY,
+  toX,
+  toY,
+  dashed = false,
+}: AnimatedConnectionLineProps) {
+  const animatedProps = useAnimatedProps(() => ({
+    x1: fromX.value,
+    y1: fromY.value,
+    x2: toX.value,
+    y2: toY.value,
+  }));
+
+  return (
+    <AnimatedLine
+      animatedProps={animatedProps}
+      stroke={dashed ? "rgba(0,0,0,0.08)" : "rgba(0,0,0,0.12)"}
+      strokeWidth={dashed ? 1.5 : 2}
+      strokeLinecap="round"
+      strokeDasharray={dashed ? "6,6" : undefined}
+    />
+  );
+}
+
+// ============================================================================
+// FLOATING NODE COMPONENT
+// ============================================================================
+
+interface FloatingPersonNodeProps {
+  person: NodeLayoutData;
+  index: number;
+  onPress: () => void;
+  canvasScale: SharedValue<number>;
+  posX: SharedValue<number>;
+  posY: SharedValue<number>;
+}
+
+function FloatingPersonNode({
+  person,
+  index,
+  onPress,
+  canvasScale,
+  posX,
+  posY,
+}: FloatingPersonNodeProps) {
+  const baseX = person.x;
+  const baseY = person.y;
+
+  // Floating offsets
+  const floatX = useSharedValue(0);
+  const floatY = useSharedValue(0);
+
+  // Drag offsets
+  const dragX = useSharedValue(0);
+  const dragY = useSharedValue(0);
+  const savedDragX = useSharedValue(0);
+  const savedDragY = useSharedValue(0);
+
+  // Node scale for press feedback
+  const nodeScale = useSharedValue(1);
+
+  // Start floating animation
+  useEffect(() => {
+    const seed = index * 1.618;
+    const dirX = Math.sin(seed) > 0 ? 1 : -1;
+    const dirY = Math.cos(seed) > 0 ? 1 : -1;
+    const distMult = 0.5 + (index % 7) * 0.1;
+    const durMult = 0.8 + (index % 5) * 0.12;
+    const dist = FLOAT_DISTANCE * distMult;
+    const dur = FLOAT_DURATION * durMult;
+    const delay = (index % 8) * 300;
+
+    const timeout = setTimeout(() => {
+      floatX.value = withRepeat(
+        withSequence(
+          withTiming(dist * dirX, { duration: dur, easing: Easing.inOut(Easing.sin) }),
+          withTiming(-dist * dirX, { duration: dur, easing: Easing.inOut(Easing.sin) })
+        ),
+        -1,
+        true
+      );
+
+      floatY.value = withRepeat(
+        withSequence(
+          withTiming(dist * 0.6 * dirY, { duration: dur * 1.3, easing: Easing.inOut(Easing.sin) }),
+          withTiming(-dist * 0.6 * dirY, { duration: dur * 1.3, easing: Easing.inOut(Easing.sin) })
+        ),
+        -1,
+        true
+      );
+    }, delay);
+
+    return () => {
+      clearTimeout(timeout);
+      cancelAnimation(floatX);
+      cancelAnimation(floatY);
+    };
+  }, [index]);
+
+  // Pan gesture
+  const panGesture = Gesture.Pan()
+    .onStart(() => {
+      cancelAnimation(dragX);
+      cancelAnimation(dragY);
+      savedDragX.value = dragX.value;
+      savedDragY.value = dragY.value;
+      nodeScale.value = withSpring(1.12, { damping: 15, stiffness: 200 });
+    })
+    .onUpdate((event) => {
+      const newDragX = savedDragX.value + event.translationX / canvasScale.value;
+      const newDragY = savedDragY.value + event.translationY / canvasScale.value;
+      dragX.value = newDragX;
+      dragY.value = newDragY;
+      // Update shared position for lines
+      posX.value = baseX + floatX.value + newDragX;
+      posY.value = baseY + floatY.value + newDragY;
+    })
+    .onEnd((event) => {
+      nodeScale.value = withSpring(1, { damping: 15, stiffness: 200 });
+      const velocityX = event.velocityX / canvasScale.value;
+      const velocityY = event.velocityY / canvasScale.value;
+
+      dragX.value = withDecay(
+        { velocity: velocityX, deceleration: 0.992 },
+        () => {
+          dragX.value = withSpring(0, { damping: 12, stiffness: 40 });
+        }
+      );
+      dragY.value = withDecay(
+        { velocity: velocityY, deceleration: 0.992 },
+        () => {
+          dragY.value = withSpring(0, { damping: 12, stiffness: 40 });
+        }
+      );
+    })
+    .minDistance(5);
+
+  // Tap gesture
+  const tapGesture = Gesture.Tap()
+    .maxDuration(200)
+    .onStart(() => {
+      nodeScale.value = withSpring(0.92, { damping: 15, stiffness: 300 });
+    })
+    .onEnd(() => {
+      nodeScale.value = withSpring(1, { damping: 15, stiffness: 300 });
+      runOnJS(onPress)();
+    });
+
+  const composedGesture = Gesture.Exclusive(tapGesture, panGesture);
+
+  // Animated style
+  const animatedStyle = useAnimatedStyle(() => {
+    const currentX = baseX + floatX.value + dragX.value;
+    const currentY = baseY + floatY.value + dragY.value;
+
+    // Keep position synced for lines
+    posX.value = currentX;
+    posY.value = currentY;
+
+    return {
+      transform: [
+        { translateX: currentX - NODE_RADIUS },
+        { translateY: currentY - NODE_RADIUS },
+        { scale: nodeScale.value },
+      ],
+    };
+  });
+
+  const initials = getInitials(person.name);
+  const firstName = person.name.split(" ")[0];
+
+  return (
+    <GestureDetector gesture={composedGesture}>
+      <Animated.View style={[styles.personNode, animatedStyle]}>
+        <View style={styles.nodeShadow} />
+        <View style={styles.nodeCircle}>
+          <Text style={styles.nodeInitials}>{initials}</Text>
+        </View>
+        <Text style={styles.nodeName} numberOfLines={1}>{firstName}</Text>
+        <Text style={styles.nodeRole} numberOfLines={1}>{person.role}</Text>
+      </Animated.View>
+    </GestureDetector>
+  );
+}
+
+// ============================================================================
+// ZOOM BUTTON
+// ============================================================================
+
+interface ZoomButtonProps {
+  onPress: () => void;
+  children: React.ReactNode;
+}
+
+function ZoomButton({ onPress, children }: ZoomButtonProps) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.zoomButton,
+        pressed && { opacity: 0.7, transform: [{ scale: 0.92 }] },
+      ]}
+    >
+      {children}
+    </Pressable>
+  );
+}
+
+// ============================================================================
+// RESET BUTTON
+// ============================================================================
+
+function ResetButton({ onPress }: { onPress: () => void }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.resetButton,
+        pressed && { opacity: 0.7, transform: [{ scale: 0.95 }] },
+      ]}
+    >
+      <RotateCcw size={16} color="#000" strokeWidth={2} />
+      <Text style={styles.resetButtonText}>Reset</Text>
+    </Pressable>
+  );
+}
+
+// ============================================================================
+// MAIN COMPONENT
+// ============================================================================
+
 export function MindmapCanvas({ people, onPersonPress }: MindmapCanvasProps) {
-  // Canvas dimensions
-  const canvasWidth = SCREEN_WIDTH * 2;
-  const canvasHeight = SCREEN_HEIGHT * 1.5;
+  // Canvas center point (shifted up a bit)
+  const centerX = SCREEN_WIDTH / 2;
+  const centerY = SCREEN_HEIGHT / 2 - 120;
 
   // Calculate layout
-  const { meNode, peopleNodes } = useMemo(() => 
-    calculateTreeLayout(people, canvasWidth, canvasHeight),
-    [people, canvasWidth, canvasHeight]
+  const { meNode, peopleNodes } = useMemo(
+    () => calculateTreeLayout(people, centerX, centerY),
+    [people, centerX, centerY]
   );
 
-  // Gesture state
+  // Me node position (static)
+  const meX = useSharedValue(meNode.x);
+  const meY = useSharedValue(meNode.y);
+
+  // Create position shared values for each person node (max 20)
+  const p0X = useSharedValue(peopleNodes[0]?.x ?? 0);
+  const p0Y = useSharedValue(peopleNodes[0]?.y ?? 0);
+  const p1X = useSharedValue(peopleNodes[1]?.x ?? 0);
+  const p1Y = useSharedValue(peopleNodes[1]?.y ?? 0);
+  const p2X = useSharedValue(peopleNodes[2]?.x ?? 0);
+  const p2Y = useSharedValue(peopleNodes[2]?.y ?? 0);
+  const p3X = useSharedValue(peopleNodes[3]?.x ?? 0);
+  const p3Y = useSharedValue(peopleNodes[3]?.y ?? 0);
+  const p4X = useSharedValue(peopleNodes[4]?.x ?? 0);
+  const p4Y = useSharedValue(peopleNodes[4]?.y ?? 0);
+  const p5X = useSharedValue(peopleNodes[5]?.x ?? 0);
+  const p5Y = useSharedValue(peopleNodes[5]?.y ?? 0);
+  const p6X = useSharedValue(peopleNodes[6]?.x ?? 0);
+  const p6Y = useSharedValue(peopleNodes[6]?.y ?? 0);
+  const p7X = useSharedValue(peopleNodes[7]?.x ?? 0);
+  const p7Y = useSharedValue(peopleNodes[7]?.y ?? 0);
+  const p8X = useSharedValue(peopleNodes[8]?.x ?? 0);
+  const p8Y = useSharedValue(peopleNodes[8]?.y ?? 0);
+  const p9X = useSharedValue(peopleNodes[9]?.x ?? 0);
+  const p9Y = useSharedValue(peopleNodes[9]?.y ?? 0);
+  const p10X = useSharedValue(peopleNodes[10]?.x ?? 0);
+  const p10Y = useSharedValue(peopleNodes[10]?.y ?? 0);
+  const p11X = useSharedValue(peopleNodes[11]?.x ?? 0);
+  const p11Y = useSharedValue(peopleNodes[11]?.y ?? 0);
+  const p12X = useSharedValue(peopleNodes[12]?.x ?? 0);
+  const p12Y = useSharedValue(peopleNodes[12]?.y ?? 0);
+  const p13X = useSharedValue(peopleNodes[13]?.x ?? 0);
+  const p13Y = useSharedValue(peopleNodes[13]?.y ?? 0);
+  const p14X = useSharedValue(peopleNodes[14]?.x ?? 0);
+  const p14Y = useSharedValue(peopleNodes[14]?.y ?? 0);
+  const p15X = useSharedValue(peopleNodes[15]?.x ?? 0);
+  const p15Y = useSharedValue(peopleNodes[15]?.y ?? 0);
+  const p16X = useSharedValue(peopleNodes[16]?.x ?? 0);
+  const p16Y = useSharedValue(peopleNodes[16]?.y ?? 0);
+  const p17X = useSharedValue(peopleNodes[17]?.x ?? 0);
+  const p17Y = useSharedValue(peopleNodes[17]?.y ?? 0);
+  const p18X = useSharedValue(peopleNodes[18]?.x ?? 0);
+  const p18Y = useSharedValue(peopleNodes[18]?.y ?? 0);
+  const p19X = useSharedValue(peopleNodes[19]?.x ?? 0);
+  const p19Y = useSharedValue(peopleNodes[19]?.y ?? 0);
+
+  // Array of position shared values for easy access
+  const allPositions = useMemo(() => [
+    { x: p0X, y: p0Y },
+    { x: p1X, y: p1Y },
+    { x: p2X, y: p2Y },
+    { x: p3X, y: p3Y },
+    { x: p4X, y: p4Y },
+    { x: p5X, y: p5Y },
+    { x: p6X, y: p6Y },
+    { x: p7X, y: p7Y },
+    { x: p8X, y: p8Y },
+    { x: p9X, y: p9Y },
+    { x: p10X, y: p10Y },
+    { x: p11X, y: p11Y },
+    { x: p12X, y: p12Y },
+    { x: p13X, y: p13Y },
+    { x: p14X, y: p14Y },
+    { x: p15X, y: p15Y },
+    { x: p16X, y: p16Y },
+    { x: p17X, y: p17Y },
+    { x: p18X, y: p18Y },
+    { x: p19X, y: p19Y },
+  ], [p0X, p0Y, p1X, p1Y, p2X, p2Y, p3X, p3Y, p4X, p4Y, p5X, p5Y, p6X, p6Y, p7X, p7Y, p8X, p8Y, p9X, p9Y, p10X, p10Y, p11X, p11Y, p12X, p12Y, p13X, p13Y, p14X, p14Y, p15X, p15Y, p16X, p16Y, p17X, p17Y, p18X, p18Y, p19X, p19Y]);
+
+  // Map person IDs to their position index
+  const idToIndex = useMemo(() => {
+    const map = new Map<string, number>();
+    peopleNodes.forEach((person, index) => {
+      if (index < 20) {
+        map.set(person.id, index);
+      }
+    });
+    return map;
+  }, [peopleNodes]);
+
+  // Canvas transform
   const scale = useSharedValue(INITIAL_SCALE);
-  const savedScale = useSharedValue(INITIAL_SCALE);
   const translateX = useSharedValue(0);
   const translateY = useSharedValue(0);
+  const savedScale = useSharedValue(INITIAL_SCALE);
   const savedTranslateX = useSharedValue(0);
   const savedTranslateY = useSharedValue(0);
 
-  // Center the view initially
-  const initialOffsetX = -(canvasWidth / 2 - SCREEN_WIDTH / 2);
-  const initialOffsetY = -(canvasHeight / 2 - (SCREEN_HEIGHT - 200) / 2);
-
-  // Pan gesture
+  // Pan gesture for canvas
   const panGesture = Gesture.Pan()
     .onStart(() => {
       savedTranslateX.value = translateX.value;
@@ -138,9 +499,16 @@ export function MindmapCanvas({ people, onPersonPress }: MindmapCanvasProps) {
     .onUpdate((event) => {
       translateX.value = savedTranslateX.value + event.translationX;
       translateY.value = savedTranslateY.value + event.translationY;
-    });
+    })
+    .onEnd((event) => {
+      translateX.value = withDecay({ velocity: event.velocityX, deceleration: 0.997 });
+      translateY.value = withDecay({ velocity: event.velocityY, deceleration: 0.997 });
+    })
+    .minDistance(10)
+    .minPointers(1)
+    .maxPointers(2);
 
-  // Pinch gesture
+  // Pinch gesture for zoom
   const pinchGesture = Gesture.Pinch()
     .onStart(() => {
       savedScale.value = scale.value;
@@ -149,256 +517,189 @@ export function MindmapCanvas({ people, onPersonPress }: MindmapCanvasProps) {
       scale.value = clamp(savedScale.value * event.scale, MIN_SCALE, MAX_SCALE);
     });
 
-  // Combine gestures
-  const composedGesture = Gesture.Simultaneous(panGesture, pinchGesture);
+  const canvasGesture = Gesture.Simultaneous(panGesture, pinchGesture);
 
-  // Animated styles
+  // Transform style
   const transformStyle = useAnimatedStyle(() => ({
     transform: [
-      { translateX: translateX.value + initialOffsetX },
-      { translateY: translateY.value + initialOffsetY },
+      { translateX: translateX.value },
+      { translateY: translateY.value },
       { scale: scale.value },
     ],
   }));
 
-  // Zoom controls
-  const zoomIn = useCallback(() => {
-    scale.value = withSpring(clamp(scale.value * 1.3, MIN_SCALE, MAX_SCALE));
+  // Zoom handlers
+  const handleZoomIn = useCallback(() => {
+    scale.value = withSpring(clamp(scale.value * 1.4, MIN_SCALE, MAX_SCALE), {
+      damping: 15,
+      stiffness: 150,
+    });
   }, []);
 
-  const zoomOut = useCallback(() => {
-    scale.value = withSpring(clamp(scale.value / 1.3, MIN_SCALE, MAX_SCALE));
+  const handleZoomOut = useCallback(() => {
+    scale.value = withSpring(clamp(scale.value / 1.4, MIN_SCALE, MAX_SCALE), {
+      damping: 15,
+      stiffness: 150,
+    });
   }, []);
 
-  const resetView = useCallback(() => {
-    scale.value = withSpring(INITIAL_SCALE);
-    translateX.value = withSpring(0);
-    translateY.value = withSpring(0);
+  const handleReset = useCallback(() => {
+    scale.value = withSpring(INITIAL_SCALE, { damping: 15, stiffness: 150 });
+    translateX.value = withSpring(0, { damping: 15, stiffness: 150 });
+    translateY.value = withSpring(0, { damping: 15, stiffness: 150 });
   }, []);
 
-  // Render connections (lines from Me to all, and between connected people)
-  const connections = useMemo(() => {
-    const lines: React.ReactElement[] = [];
+  // Build connection data
+  const connectionData = useMemo(() => {
+    const connections: Array<{
+      key: string;
+      fromIndex: number | "me";
+      toIndex: number;
+      dashed: boolean;
+    }> = [];
     const drawn = new Set<string>();
 
     // Lines from Me to everyone
-    peopleNodes.forEach((person) => {
-      lines.push(
-        <Line
-          key={`me-${person.id}`}
-          x1={meNode.x}
-          y1={meNode.y}
-          x2={person.x}
-          y2={person.y}
-          stroke={SVG_COLORS.lineStroke}
-          strokeWidth={2}
-          strokeLinecap="round"
-        />
-      );
+    peopleNodes.forEach((person, index) => {
+      if (index < 20) {
+        connections.push({
+          key: `me-${person.id}`,
+          fromIndex: "me",
+          toIndex: index,
+          dashed: false,
+        });
+      }
     });
 
     // Lines between connected people
-    peopleNodes.forEach((person) => {
+    peopleNodes.forEach((person, index) => {
+      if (index >= 20) return;
       person.connections.forEach((connId) => {
         const key = [person.id, connId].sort().join("-");
         if (drawn.has(key)) return;
         drawn.add(key);
 
-        const other = peopleNodes.find((p) => p.id === connId);
-        if (!other) return;
+        const otherIndex = idToIndex.get(connId);
+        if (otherIndex === undefined || otherIndex >= 20) return;
 
-        lines.push(
-          <Line
-            key={key}
-            x1={person.x}
-            y1={person.y}
-            x2={other.x}
-            y2={other.y}
-            stroke={SVG_COLORS.lineStroke}
-            strokeWidth={1.5}
-            strokeLinecap="round"
-            strokeDasharray="4,4"
-          />
-        );
+        connections.push({
+          key,
+          fromIndex: index,
+          toIndex: otherIndex,
+          dashed: true,
+        });
       });
     });
 
-    return lines;
-  }, [peopleNodes, meNode]);
-
-  // Render people nodes
-  const nodes = useMemo(() => {
-    return peopleNodes.map((person) => {
-      const initials = getInitials(person.name);
-      const firstName = person.name.split(' ')[0];
-
-      return (
-        <G key={person.id}>
-          {/* Node shadow */}
-          <Circle
-            cx={person.x + 2}
-            cy={person.y + 3}
-            r={NODE_RADIUS}
-            fill="rgba(0, 0, 0, 0.08)"
-          />
-          {/* Node background */}
-          <Circle
-            cx={person.x}
-            cy={person.y}
-            r={NODE_RADIUS}
-            fill={SVG_COLORS.nodeBackground}
-            stroke={SVG_COLORS.nodeStroke}
-            strokeWidth={2}
-          />
-          {/* Initials */}
-          <SvgText
-            x={person.x}
-            y={person.y + 5}
-            fill={SVG_COLORS.textSecondary}
-            fontSize={16}
-            fontWeight="600"
-            textAnchor="middle"
-          >
-            {initials}
-          </SvgText>
-          {/* Name below node */}
-          <SvgText
-            x={person.x}
-            y={person.y + NODE_RADIUS + 18}
-            fill={SVG_COLORS.textPrimary}
-            fontSize={12}
-            fontWeight="600"
-            textAnchor="middle"
-          >
-            {firstName}
-          </SvgText>
-          {/* Role */}
-          <SvgText
-            x={person.x}
-            y={person.y + NODE_RADIUS + 32}
-            fill={SVG_COLORS.textSecondary}
-            fontSize={10}
-            fontWeight="400"
-            textAnchor="middle"
-          >
-            {person.role}
-          </SvgText>
-        </G>
-      );
-    });
-  }, [peopleNodes]);
-
-  // Render "Me" node
-  const meNodeElement = useMemo(() => (
-    <G>
-      {/* Shadow */}
-      <Circle
-        cx={meNode.x + 3}
-        cy={meNode.y + 4}
-        r={ME_NODE_RADIUS}
-        fill="rgba(0, 0, 0, 0.15)"
-      />
-      {/* Background */}
-      <Circle
-        cx={meNode.x}
-        cy={meNode.y}
-        r={ME_NODE_RADIUS}
-        fill={SVG_COLORS.meNodeBackground}
-      />
-      {/* Text */}
-      <SvgText
-        x={meNode.x}
-        y={meNode.y + 7}
-        fill={SVG_COLORS.meNodeText}
-        fontSize={22}
-        fontWeight="700"
-        textAnchor="middle"
-      >
-        Me
-      </SvgText>
-    </G>
-  ), [meNode]);
-
-  // Touch targets for people nodes
-  const touchTargets = useMemo(() => {
-    return peopleNodes.map((person) => ({
-      id: person.id,
-      person,
-      x: person.x,
-      y: person.y,
-    }));
-  }, [peopleNodes]);
+    return connections;
+  }, [peopleNodes, idToIndex]);
 
   return (
     <GestureHandlerRootView style={styles.container}>
-      <GestureDetector gesture={composedGesture}>
+      <GestureDetector gesture={canvasGesture}>
         <Animated.View style={styles.canvasContainer}>
           <Animated.View style={[styles.transformLayer, transformStyle]}>
-            <Svg width={canvasWidth} height={canvasHeight}>
-              {connections}
-              {nodes}
-              {meNodeElement}
-            </Svg>
-          </Animated.View>
+            {/* SVG for lines and Me node */}
+            <Svg
+              width={SCREEN_WIDTH}
+              height={SCREEN_HEIGHT}
+              style={StyleSheet.absoluteFill}
+            >
+              {/* Connection lines */}
+              {connectionData.map(({ key, fromIndex, toIndex, dashed }) => {
+                const fromPos = fromIndex === "me" ? { x: meX, y: meY } : allPositions[fromIndex];
+                const toPos = allPositions[toIndex];
+                if (!fromPos || !toPos) return null;
 
-          {/* Touch layer */}
-          <Animated.View
-            style={[styles.touchLayer, transformStyle, { width: canvasWidth, height: canvasHeight }]}
-            pointerEvents="box-none"
-          >
-            {touchTargets.map(({ id, person, x, y }) => (
-              <Pressable
-                key={id}
+                return (
+                  <AnimatedConnectionLine
+                    key={key}
+                    fromX={fromPos.x}
+                    fromY={fromPos.y}
+                    toX={toPos.x}
+                    toY={toPos.y}
+                    dashed={dashed}
+                  />
+                );
+              })}
+
+              {/* Me node */}
+              <G>
+                <Circle
+                  cx={meNode.x + 4}
+                  cy={meNode.y + 5}
+                  r={ME_NODE_RADIUS}
+                  fill="rgba(0,0,0,0.1)"
+                />
+                <Circle
+                  cx={meNode.x}
+                  cy={meNode.y}
+                  r={ME_NODE_RADIUS}
+                  fill="#000"
+                />
+                <SvgText
+                  x={meNode.x}
+                  y={meNode.y + 8}
+                  fill="#FFF"
+                  fontSize={24}
+                  fontWeight="700"
+                  textAnchor="middle"
+                >
+                  Me
+                </SvgText>
+              </G>
+            </Svg>
+
+            {/* Person nodes */}
+            {peopleNodes.slice(0, 20).map((person, index) => (
+              <FloatingPersonNode
+                key={person.id}
+                person={person}
+                index={index}
                 onPress={() => onPersonPress(person)}
-                style={[
-                  styles.touchTarget,
-                  {
-                    left: x - NODE_RADIUS,
-                    top: y - NODE_RADIUS,
-                    width: NODE_RADIUS * 2,
-                    height: NODE_RADIUS * 2,
-                    borderRadius: NODE_RADIUS,
-                  },
-                ]}
+                canvasScale={scale}
+                posX={allPositions[index].x}
+                posY={allPositions[index].y}
               />
             ))}
           </Animated.View>
         </Animated.View>
       </GestureDetector>
 
-      {/* Zoom controls */}
+      {/* Controls */}
       <View style={styles.zoomControls}>
-        <Pressable onPress={zoomIn} style={styles.zoomButton}>
-          <Plus size={20} color={SvgColors.text} strokeWidth={2} />
-        </Pressable>
-        <Pressable onPress={zoomOut} style={styles.zoomButton}>
-          <Minus size={20} color={SvgColors.text} strokeWidth={2} />
-        </Pressable>
+        <ZoomButton onPress={handleZoomIn}>
+          <Plus size={22} color="#000" strokeWidth={2.5} />
+        </ZoomButton>
+        <ZoomButton onPress={handleZoomOut}>
+          <Minus size={22} color="#000" strokeWidth={2.5} />
+        </ZoomButton>
       </View>
 
-      {/* Reset view button */}
-      <Pressable onPress={resetView} style={styles.resetButton}>
-        <Text style={styles.resetButtonText}>Reset</Text>
-      </Pressable>
+      <ResetButton onPress={handleReset} />
 
       {/* Legend */}
       <View style={styles.legend}>
         <View style={styles.legendItem}>
-          <View style={[styles.legendDot, { backgroundColor: '#000' }]} />
+          <View style={[styles.legendDot, { backgroundColor: "#000" }]} />
           <Text style={styles.legendText}>You</Text>
         </View>
         <View style={styles.legendItem}>
-          <View style={[styles.legendLine, { borderStyle: 'solid' }]} />
+          <View style={[styles.legendLine, { borderStyle: "solid" }]} />
           <Text style={styles.legendText}>Direct</Text>
         </View>
         <View style={styles.legendItem}>
-          <View style={[styles.legendLine, { borderStyle: 'dashed' }]} />
+          <View style={[styles.legendLine, { borderStyle: "dashed" }]} />
           <Text style={styles.legendText}>Connected</Text>
         </View>
       </View>
     </GestureHandlerRootView>
   );
 }
+
+// ============================================================================
+// STYLES
+// ============================================================================
 
 const styles = StyleSheet.create({
   container: {
@@ -410,65 +711,126 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   transformLayer: {
-    position: "absolute",
-    top: 0,
-    left: 0,
+    width: SCREEN_WIDTH,
+    height: SCREEN_HEIGHT,
   },
-  touchLayer: {
+
+  // Person node
+  personNode: {
     position: "absolute",
-    top: 0,
-    left: 0,
+    width: NODE_RADIUS * 2,
+    alignItems: "center",
   },
-  touchTarget: {
+  nodeShadow: {
     position: "absolute",
+    top: 4,
+    left: 3,
+    width: NODE_RADIUS * 2,
+    height: NODE_RADIUS * 2,
+    borderRadius: NODE_RADIUS,
+    backgroundColor: "rgba(0,0,0,0.08)",
   },
-  zoomControls: {
-    position: "absolute",
-    bottom: 24,
-    right: Spacing.md,
-    gap: Spacing.xs,
-  },
-  zoomButton: {
-    width: 44,
-    height: 44,
-    backgroundColor: colors.surface,
-    borderRadius: BorderRadius.md,
-    borderWidth: 1,
-    borderColor: colors.borderOpacity?.[15] || 'rgba(0,0,0,0.15)',
+  nodeCircle: {
+    width: NODE_RADIUS * 2,
+    height: NODE_RADIUS * 2,
+    borderRadius: NODE_RADIUS,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 2,
+    borderColor: "rgba(0,0,0,0.1)",
     alignItems: "center",
     justifyContent: "center",
-    ...Shadows.md,
+  },
+  nodeInitials: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "rgba(0,0,0,0.6)",
+    letterSpacing: 0.5,
+  },
+  nodeName: {
+    marginTop: 8,
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#000",
+    textAlign: "center",
+    maxWidth: NODE_RADIUS * 2.5,
+  },
+  nodeRole: {
+    marginTop: 2,
+    fontSize: 11,
+    color: "rgba(0,0,0,0.45)",
+    textAlign: "center",
+    maxWidth: NODE_RADIUS * 2.5,
+  },
+
+  // Controls
+  zoomControls: {
+    position: "absolute",
+    bottom: 36,
+    right: 16,
+    gap: 10,
+  },
+  zoomButton: {
+    width: 48,
+    height: 48,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.1)",
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
   },
   resetButton: {
-    position: 'absolute',
-    bottom: 24,
-    left: Spacing.md,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
-    backgroundColor: colors.surface,
-    borderRadius: BorderRadius.md,
+    position: "absolute",
+    bottom: 36,
+    left: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: colors.borderOpacity?.[15] || 'rgba(0,0,0,0.15)',
-    ...Shadows.sm,
+    borderColor: "rgba(0,0,0,0.1)",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
+    elevation: 2,
   },
   resetButtonText: {
-    ...Typography.footnote,
-    fontWeight: '500',
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#000",
   },
+
+  // Legend
   legend: {
-    position: 'absolute',
-    top: Spacing.md,
-    left: Spacing.md,
-    backgroundColor: colors.surfaceOpacity?.[80] || 'rgba(255,255,255,0.8)',
-    borderRadius: BorderRadius.md,
-    padding: Spacing.sm,
-    gap: Spacing.xs,
-    ...Shadows.sm,
+    position: "absolute",
+    top: 12,
+    left: 12,
+    backgroundColor: "rgba(255,255,255,0.95)",
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 4,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
+    elevation: 2,
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.06)",
   },
   legendItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.xs,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
   },
   legendDot: {
     width: 12,
@@ -479,10 +841,11 @@ const styles = StyleSheet.create({
     width: 16,
     height: 0,
     borderTopWidth: 2,
-    borderColor: 'rgba(0,0,0,0.2)',
+    borderColor: "rgba(0,0,0,0.25)",
   },
   legendText: {
-    ...Typography.caption,
-    color: colors.textOpacity?.[60] || 'rgba(0,0,0,0.6)',
+    fontSize: 11,
+    color: "rgba(0,0,0,0.6)",
+    fontWeight: "500",
   },
 });
