@@ -24,7 +24,7 @@ const baseColors = {
   primaryForeground: '#FFFFFF',
   
   // Backgrounds
-  background: '#FAFAFA',
+  background: '#FFFFFF',
   
   // Base surface color (solid white)
   surface: '#FFFFFF',

@@ -1,4 +1,4 @@
-// pearlapp-mobile1/components/surfaces/Sheet.tsx
+// components/surfaces/Sheet.tsx
 import React, { useEffect } from 'react';
 import {
   View,
@@ -6,10 +6,10 @@ import {
   StyleSheet,
   Modal,
   Pressable,
-  KeyboardAvoidingView,
-  Platform,
   ScrollView,
   Dimensions,
+  Platform,
+  Keyboard,
 } from 'react-native';
 import Animated, {
   useSharedValue,
@@ -18,7 +18,10 @@ import Animated, {
   withSpring,
   runOnJS,
   Easing,
+  useAnimatedKeyboard,
+  useAnimatedReaction,
 } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { X } from 'lucide-react-native';
 import { colors, SvgColors, Typography, BorderRadius, Spacing, Shadows, Animation } from '@/constants';
 
@@ -32,8 +35,12 @@ interface SheetProps {
 }
 
 export function Sheet({ isOpen, onClose, title, children }: SheetProps) {
+  const insets = useSafeAreaInsets();
   const translateY = useSharedValue(SCREEN_HEIGHT);
   const overlayOpacity = useSharedValue(0);
+  
+  // Calculate max height accounting for safe areas
+  const maxSheetHeight = SCREEN_HEIGHT - insets.top - 20; // 20px buffer from top
 
   useEffect(() => {
     if (isOpen) {
@@ -66,6 +73,7 @@ export function Sheet({ isOpen, onClose, title, children }: SheetProps) {
   }));
 
   const handleClose = () => {
+    Keyboard.dismiss();
     overlayOpacity.value = withTiming(0, {
       duration: Animation.duration.fast,
     });
@@ -91,17 +99,23 @@ export function Sheet({ isOpen, onClose, title, children }: SheetProps) {
       statusBarTranslucent
       onRequestClose={handleClose}
     >
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.modalContainer}
-      >
+      <View style={styles.modalContainer}>
         {/* Overlay */}
         <Animated.View style={[styles.overlay, overlayAnimatedStyle]}>
           <Pressable style={StyleSheet.absoluteFill} onPress={handleClose} />
         </Animated.View>
 
-        {/* Sheet */}
-        <Animated.View style={[styles.sheet, sheetAnimatedStyle]}>
+        {/* Sheet - positioned at bottom with maxHeight constraint */}
+        <Animated.View 
+          style={[
+            styles.sheet, 
+            sheetAnimatedStyle,
+            { 
+              maxHeight: maxSheetHeight,
+              paddingBottom: Math.max(insets.bottom, 20),
+            }
+          ]}
+        >
           {/* Handle */}
           <View style={styles.handleContainer}>
             <View style={styles.handle} />
@@ -118,17 +132,19 @@ export function Sheet({ isOpen, onClose, title, children }: SheetProps) {
             </Pressable>
           </View>
 
-          {/* Content */}
+          {/* Content - ScrollView handles keyboard internally */}
           <ScrollView
-            style={styles.content}
-            contentContainerStyle={styles.contentContainer}
+            style={styles.scrollView}
+            contentContainerStyle={styles.scrollContent}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="interactive"
+            bounces={true}
           >
             {children}
           </ScrollView>
         </Animated.View>
-      </KeyboardAvoidingView>
+      </View>
     </Modal>
   );
 }
@@ -143,35 +159,35 @@ const styles = StyleSheet.create({
     backgroundColor: colors.overlay,
   },
   sheet: {
-    backgroundColor: colors.surfaceOpacity[95],
+    backgroundColor: colors.surfaceOpacity?.[95] || 'rgba(255, 255, 255, 0.98)',
     borderTopLeftRadius: BorderRadius.xxl,
     borderTopRightRadius: BorderRadius.xxl,
-    maxHeight: SCREEN_HEIGHT * 0.9,
     ...Shadows.sheet,
-    // Glass effect border
-    borderTopWidth: 2,
-    borderLeftWidth: 2,
-    borderRightWidth: 2,
-    borderColor: colors.borderOpacity[10],
+    // Clean border, no heavy shadow
+    borderTopWidth: 1,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderColor: colors.borderOpacity?.[10] || 'rgba(0, 0, 0, 0.1)',
   },
   handleContainer: {
     alignItems: 'center',
-    paddingTop: Spacing[2],
+    paddingTop: Spacing[2] || 8,
+    paddingBottom: Spacing[1] || 4,
   },
   handle: {
     width: 36,
     height: 4,
     borderRadius: 2,
-    backgroundColor: colors.borderOpacity[20],
+    backgroundColor: colors.borderOpacity?.[20] || 'rgba(0, 0, 0, 0.2)',
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: Spacing[4],
-    paddingVertical: Spacing[4],
-    borderBottomWidth: 2,
-    borderBottomColor: colors.borderOpacity[10],
+    paddingHorizontal: Spacing[4] || 16,
+    paddingVertical: Spacing[3] || 12,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderOpacity?.[10] || 'rgba(0, 0, 0, 0.1)',
   },
   title: {
     ...Typography.headline,
@@ -179,13 +195,14 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
   closeButton: {
-    padding: Spacing[1.5],
+    padding: Spacing[1.5] || 6,
     borderRadius: BorderRadius.full,
   },
-  content: {
-    flex: 1,
+  scrollView: {
+    flexGrow: 0,
+    flexShrink: 1,
   },
-  contentContainer: {
-    flexGrow: 1,
+  scrollContent: {
+    paddingBottom: Spacing[4] || 16,
   },
 });

@@ -5,11 +5,15 @@ import Animated, {
   useAnimatedStyle,
   withTiming,
   withSpring,
+  withSequence,
   FadeIn,
+  interpolateColor,
+  runOnJS,
 } from 'react-native-reanimated';
 import { Check } from 'lucide-react-native';
 import { Reminder, getPersonById, formatDueDate, isOverdue } from '@/data/sampleData';
 import { colors, Typography, BorderRadius, Spacing, Animation } from '@/constants';
+import * as Haptics from 'expo-haptics';
 
 interface ReminderRowProps {
   reminder: Reminder;
@@ -19,6 +23,7 @@ interface ReminderRowProps {
 }
 
 const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 export function ReminderRow({
   reminder,
@@ -30,73 +35,130 @@ export function ReminderRow({
   const isDone = reminder.status === 'Done';
   const isReminderOverdue = !isDone && isOverdue(reminder.dueDate);
 
-  const backgroundColor = useSharedValue('transparent');
+  // Row animations
+  const rowBackgroundColor = useSharedValue('transparent');
+  
+  // Checkbox animations
   const checkboxScale = useSharedValue(1);
+  const checkboxProgress = useSharedValue(isDone ? 1 : 0);
+  const checkmarkScale = useSharedValue(isDone ? 1 : 0);
+  const checkmarkRotate = useSharedValue(isDone ? 0 : -45);
 
   const animatedRowStyle = useAnimatedStyle(() => ({
-    backgroundColor: backgroundColor.value,
+    backgroundColor: rowBackgroundColor.value,
   }));
 
   const animatedCheckboxStyle = useAnimatedStyle(() => ({
     transform: [{ scale: checkboxScale.value }],
+    backgroundColor: interpolateColor(
+      checkboxProgress.value,
+      [0, 1],
+      ['transparent', colors.primary]
+    ),
+    borderColor: interpolateColor(
+      checkboxProgress.value,
+      [0, 1],
+      [colors.borderOpacity[20], colors.primary]
+    ),
   }));
 
-  const handlePressIn = () => {
-    backgroundColor.value = withTiming(colors.surfaceOpacity[80], {
+  const animatedCheckmarkStyle = useAnimatedStyle(() => ({
+    transform: [
+      { scale: checkmarkScale.value },
+      { rotate: `${checkmarkRotate.value}deg` },
+    ],
+    opacity: checkmarkScale.value,
+  }));
+
+  // Row press handlers
+  const handleRowPressIn = () => {
+    rowBackgroundColor.value = withTiming(colors.surfaceOpacity[80], {
       duration: Animation.duration.fast,
     });
   };
 
-  const handlePressOut = () => {
-    backgroundColor.value = withTiming('transparent', {
+  const handleRowPressOut = () => {
+    rowBackgroundColor.value = withTiming('transparent', {
       duration: Animation.duration.fast,
     });
+  };
+
+  // Checkbox press handlers with enhanced animation
+  const triggerHaptic = () => {
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    } catch (e) {
+      // Haptics not available
+    }
+  };
+
+  const handleCheckboxPress = () => {
+    // Trigger haptic feedback
+    runOnJS(triggerHaptic)();
+    
+    // Bounce animation
+    checkboxScale.value = withSequence(
+      withSpring(0.8, { damping: 10, stiffness: 400 }),
+      withSpring(1.2, { damping: 10, stiffness: 400 }),
+      withSpring(1, { damping: 15, stiffness: 300 })
+    );
+
+    if (isDone) {
+      // Unchecking
+      checkboxProgress.value = withTiming(0, { duration: 200 });
+      checkmarkScale.value = withTiming(0, { duration: 150 });
+      checkmarkRotate.value = withTiming(-45, { duration: 150 });
+    } else {
+      // Checking
+      checkboxProgress.value = withTiming(1, { duration: 200 });
+      checkmarkScale.value = withSequence(
+        withTiming(0, { duration: 0 }),
+        withSpring(1.2, { damping: 12, stiffness: 400 }),
+        withSpring(1, { damping: 15, stiffness: 300 })
+      );
+      checkmarkRotate.value = withSequence(
+        withTiming(-45, { duration: 0 }),
+        withSpring(0, { damping: 12, stiffness: 300 })
+      );
+    }
+
+    // Call the actual toggle
+    onToggle();
   };
 
   const handleCheckboxPressIn = () => {
-    checkboxScale.value = withSpring(Animation.scale.pressedStrong, {
-      damping: Animation.spring.damping,
-      stiffness: Animation.spring.stiffness,
+    checkboxScale.value = withSpring(0.85, {
+      damping: 15,
+      stiffness: 400,
     });
   };
 
   const handleCheckboxPressOut = () => {
-    checkboxScale.value = withSpring(1, {
-      damping: Animation.spring.damping,
-      stiffness: Animation.spring.stiffness,
-    });
+    // Scale will be handled by handleCheckboxPress animation
   };
 
   return (
     <AnimatedTouchable
       onPress={onPress}
-      onPressIn={handlePressIn}
-      onPressOut={handlePressOut}
+      onPressIn={handleRowPressIn}
+      onPressOut={handleRowPressOut}
       activeOpacity={1}
       entering={FadeIn.duration(Animation.duration.slow).delay(animationDelay)}
       style={[styles.container, animatedRowStyle]}
     >
       {/* Checkbox */}
-      <Pressable
-        onPress={onToggle}
+      <AnimatedPressable
+        onPress={handleCheckboxPress}
         onPressIn={handleCheckboxPressIn}
         onPressOut={handleCheckboxPressOut}
         style={styles.checkboxTouchArea}
       >
-        <Animated.View
-          style={[
-            styles.checkbox,
-            isDone && styles.checkboxChecked,
-            animatedCheckboxStyle,
-          ]}
-        >
-          {isDone && (
-            <Animated.View entering={FadeIn.duration(Animation.duration.fast)}>
-              <Check size={12} color={colors.primaryForeground} strokeWidth={3} />
-            </Animated.View>
-          )}
+        <Animated.View style={[styles.checkbox, animatedCheckboxStyle]}>
+          <Animated.View style={animatedCheckmarkStyle}>
+            <Check size={12} color={colors.primaryForeground} strokeWidth={3} />
+          </Animated.View>
         </Animated.View>
-      </Pressable>
+      </AnimatedPressable>
 
       {/* Content */}
       <View style={styles.content}>
@@ -146,17 +208,13 @@ const styles = StyleSheet.create({
     marginTop: Spacing[1],
   },
   checkbox: {
-    width: 20,
-    height: 20,
+    width: 22,
+    height: 22,
     borderRadius: BorderRadius.full,
     borderWidth: 2,
-    borderColor: colors.borderOpacity[20],
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  checkboxChecked: {
-    backgroundColor: colors.primary,
-    borderColor: colors.primary,
+    overflow: 'hidden',
   },
   content: {
     flex: 1,
@@ -190,7 +248,7 @@ const styles = StyleSheet.create({
     color: colors.textOpacity[40],
   },
   dueDateOverdue: {
-    color: colors.textOpacity[80],
+    color: colors.error || colors.textOpacity[80],
   },
   priority: {
     ...Typography.footnote,

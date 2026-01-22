@@ -1,47 +1,67 @@
 import { Tabs } from 'expo-router';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Bell, Network, Users, FileText, Search } from 'lucide-react-native';
-import Animated, { 
-  useAnimatedStyle, 
+import Animated, {
+  useAnimatedStyle,
   withSpring,
   useSharedValue,
+  interpolateColor,
 } from 'react-native-reanimated';
-import { Colors, Typography } from '@/constants';
+import { useEffect } from 'react';
+import { Colors, Shadows } from '@/constants';
 
-const ICON_SIZE = 24;
-const ICON_STROKE = 2.5;
+const ICON_SIZE = 29;
+const ICON_STROKE = 2;
+const TAB_BAR_HEIGHT = 50;
+const TAB_BAR_PADDING_TOP = 17;
 
 interface TabBarIconProps {
   focused: boolean;
   icon: React.ReactNode;
-  label: string;
 }
 
-function TabBarIcon({ focused, icon, label }: TabBarIconProps) {
+function TabBarIcon({ focused, icon }: TabBarIconProps) {
   const scale = useSharedValue(1);
-  
-  const animatedStyle = useAnimatedStyle(() => ({
+  const activeProgress = useSharedValue(0);
+
+  // Animate when focused changes
+  useEffect(() => {
+    activeProgress.value = withSpring(focused ? 1 : 0, {
+      damping: 20,
+      stiffness: 300,
+    });
+
+    // Subtle bounce effect on selection
+    if (focused) {
+      scale.value = withSpring(1.15, { damping: 12, stiffness: 400 }, () => {
+        scale.value = withSpring(1, { damping: 15, stiffness: 300 });
+      });
+    }
+  }, [focused]);
+
+  const animatedIconContainerStyle = useAnimatedStyle(() => ({
+    backgroundColor: interpolateColor(
+      activeProgress.value,
+      [0, 1],
+      ['transparent', 'rgba(0, 0, 0, 0.08)']
+    ),
     transform: [{ scale: scale.value }],
   }));
 
   return (
-    <Animated.View style={[styles.tabItem, animatedStyle]}>
-      <View style={[styles.iconContainer, focused && styles.iconContainerActive]}>
+    <View style={styles.tabItem}>
+      <Animated.View style={[styles.iconContainer, animatedIconContainerStyle]}>
         {icon}
-      </View>
-      <Text style={[
-        styles.tabLabel,
-        focused ? styles.tabLabelActive : styles.tabLabelInactive
-      ]}>
-        {label}
-      </Text>
-    </Animated.View>
+      </Animated.View>
+    </View>
   );
 }
 
 export default function TabLayout() {
   const insets = useSafeAreaInsets();
+
+  const bottomPadding = Math.max(insets.bottom, TAB_BAR_PADDING_TOP);
 
   return (
     <Tabs
@@ -49,21 +69,25 @@ export default function TabLayout() {
         headerShown: false,
         tabBarStyle: [
           styles.tabBar,
-          { paddingBottom: Math.max(insets.bottom, 8) }
+          {
+            paddingBottom: bottomPadding,
+            height: TAB_BAR_HEIGHT + bottomPadding,
+          },
         ],
         tabBarShowLabel: false,
         tabBarActiveTintColor: Colors.text.primary,
         tabBarInactiveTintColor: Colors.text.tertiary,
+        tabBarItemStyle: styles.tabBarItem,
+        sceneStyle: styles.sceneStyle,
       }}
     >
       <Tabs.Screen
         name="index"
         options={{
           tabBarIcon: ({ focused, color }) => (
-            <TabBarIcon 
-              focused={focused} 
+            <TabBarIcon
+              focused={focused}
               icon={<Bell size={ICON_SIZE} strokeWidth={ICON_STROKE} color={color} />}
-              label="Reminders"
             />
           ),
         }}
@@ -72,10 +96,9 @@ export default function TabLayout() {
         name="mindmap"
         options={{
           tabBarIcon: ({ focused, color }) => (
-            <TabBarIcon 
-              focused={focused} 
+            <TabBarIcon
+              focused={focused}
               icon={<Network size={ICON_SIZE} strokeWidth={ICON_STROKE} color={color} />}
-              label="Mindmap"
             />
           ),
         }}
@@ -84,10 +107,9 @@ export default function TabLayout() {
         name="contacts"
         options={{
           tabBarIcon: ({ focused, color }) => (
-            <TabBarIcon 
-              focused={focused} 
+            <TabBarIcon
+              focused={focused}
               icon={<Users size={ICON_SIZE} strokeWidth={ICON_STROKE} color={color} />}
-              label="Contacts"
             />
           ),
         }}
@@ -96,10 +118,9 @@ export default function TabLayout() {
         name="logs"
         options={{
           tabBarIcon: ({ focused, color }) => (
-            <TabBarIcon 
-              focused={focused} 
+            <TabBarIcon
+              focused={focused}
               icon={<FileText size={ICON_SIZE} strokeWidth={ICON_STROKE} color={color} />}
-              label="Logs"
             />
           ),
         }}
@@ -108,10 +129,9 @@ export default function TabLayout() {
         name="search"
         options={{
           tabBarIcon: ({ focused, color }) => (
-            <TabBarIcon 
-              focused={focused} 
+            <TabBarIcon
+              focused={focused}
               icon={<Search size={ICON_SIZE} strokeWidth={ICON_STROKE} color={color} />}
-              label="Search"
             />
           ),
         }}
@@ -121,39 +141,32 @@ export default function TabLayout() {
 }
 
 const styles = StyleSheet.create({
+  sceneStyle: {
+    backgroundColor: '#FFFFFF',
+  },
   tabBar: {
-    backgroundColor: Colors.surface[95] || Colors.surfaceOpacity?.[95] || 'rgba(255, 255, 255, 0.95)',
-    borderTopWidth: 2,
-    borderTopColor: Colors.border[15],
-    paddingTop: 8,
-    height: 'auto',
-    minHeight: 70,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 20,
-    elevation: 20,
+    backgroundColor: '#FFFFFF',
+    borderTopWidth: 1,
+    borderTopColor: Colors.border[10],
+    paddingTop: TAB_BAR_PADDING_TOP,
+    ...Shadows.tabBar,
+  },
+  tabBarItem: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   tabItem: {
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
-    paddingVertical: 4,
+    minWidth: 48,
+    minHeight: 48,
   },
   iconContainer: {
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  iconContainerActive: {},
-  tabLabel: {
-    fontSize: Typography.caption.fontSize,
-    lineHeight: Typography.caption.lineHeight,
-  },
-  tabLabelActive: {
-    opacity: 1,
-    fontWeight: '500',
-  },
-  tabLabelInactive: {
-    opacity: 0.4,
+    width: 48,
+    height: 32,
+    borderRadius: 16,
   },
 });
